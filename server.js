@@ -143,15 +143,21 @@ io.on("connection", (socket) => {
 
   // ── LOBBY ──────────────────────────────────────────────────────────────
   socket.on("lobby_join", ({ username, pigColor, character }) => {
-    // Single-device enforcement: kick existing session for this username
+    // Single-device enforcement: kick existing session for this username,
+    // but only if the previous socket is NOT currently in a game or battle room.
     if (username) {
       const key = String(username).toLowerCase();
       const prevId = activeUsers.get(key);
       if (prevId && prevId !== socket.id) {
-        const prevSocket = io.sockets.sockets.get(prevId);
-        if (prevSocket) {
-          prevSocket.emit("session_kicked", { reason: "Login dari perangkat lain terdeteksi." });
-          prevSocket.disconnect(true);
+        const prevIsInGame =
+          Array.from(battleRooms.values()).some((br) => br.players.has(prevId)) ||
+          Array.from(rooms.values()).some((r) => r.players.has(prevId));
+        if (!prevIsInGame) {
+          const prevSocket = io.sockets.sockets.get(prevId);
+          if (prevSocket) {
+            prevSocket.emit("session_kicked", { reason: "Login dari perangkat lain terdeteksi." });
+            prevSocket.disconnect(true);
+          }
         }
       }
       activeUsers.set(key, socket.id);
@@ -178,6 +184,10 @@ io.on("connection", (socket) => {
     lobbyPlayers.delete(socket.id);
     socket.leave("lobby");
     broadcastLobby();
+  });
+
+  socket.on("request_room_list", () => {
+    socket.emit("room_list", getRoomList());
   });
 
   socket.on("lobby_chat_send", ({ text }) => {
@@ -798,6 +808,13 @@ io.on("connection", (socket) => {
   });
 });
 
+
+// ── Periodic room list sync ────────────────────────────────────────────────
+// Pushes a fresh room list to every connected socket every 4 s so the lobby
+// never shows stale data even if a client missed the event-driven broadcast.
+setInterval(() => {
+  io.emit("room_list", getRoomList());
+}, 4000);
 
 // ── Start ──────────────────────────────────────────────────────────────────
 app.prepare().then(() => {

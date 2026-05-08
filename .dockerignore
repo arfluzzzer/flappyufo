@@ -1,0 +1,11 @@
+node_modules
+.next
+.git
+.gitignore
+.env*
+*.md
+*.log
+.DS_Store
+coverage
+.vercel
+flappy-pig.code-workspace
