@@ -43,7 +43,7 @@ interface InviteNotif { fromId: string; fromUsername: string; roomId: string; sp
 interface LobbyMsg { id: string; username: string; pigColor: string; text: string; ts: number; }
 interface RoomItem { id: string; host: string; playerCount: number; gameMode: string; speed: number; hasPassword: boolean; started: boolean; }
 
-type ActiveTab = "solo" | "multi" | "battle";
+type ActiveTab = "solo" | "multi" | "battle" | "egg";
 
 export default function LobbyPage() {
   const [user, setUser] = useState<User | null>(null);
@@ -63,6 +63,8 @@ export default function LobbyPage() {
   const [joinId, setJoinId] = useState("");
   const [battleRoom, setBattleRoom] = useState<string | null>(null);
   const [joinBattleId, setJoinBattleId] = useState("");
+  const [eggRoom, setEggRoom] = useState<string | null>(null);
+  const [joinEggId, setJoinEggId] = useState("");
   const [roomList, setRoomList] = useState<RoomItem[]>([]);
   const [createPasswordEnabled, setCreatePasswordEnabled] = useState(false);
   const [createPassword, setCreatePassword] = useState("");
@@ -195,12 +197,9 @@ export default function LobbyPage() {
     };
   }, [router]);
 
-  // Request fresh room list whenever switching to multi or battle tabs
   function handleTabChange(tab: ActiveTab) {
     setActiveTab(tab);
-    if (tab === "multi" || tab === "battle") {
-      socketRef.current?.emit("request_room_list");
-    }
+    if (tab !== "solo") socketRef.current?.emit("request_room_list");
   }
 
   function playSolo() { socketRef.current?.emit("lobby_leave"); router.push(`/game?mode=solo&speed=${speed}`); }
@@ -227,6 +226,7 @@ export default function LobbyPage() {
   function joinFromList(room: RoomItem, pw?: string) {
     socketRef.current?.emit("lobby_leave");
     if (room.gameMode === "battle") { router.push(`/battle?room=${room.id}`); return; }
+    if (room.gameMode === "egg")    { router.push(`/lempar-telur?room=${room.id}`); return; }
     const modeParam = room.gameMode === "dino" ? "multi-dino" : "multi";
     const pwParam = pw ? `&pw=${encodeURIComponent(pw)}` : "";
     router.push(`/game?mode=${modeParam}&room=${room.id}&speed=${room.speed}${pwParam}`);
@@ -264,6 +264,18 @@ export default function LobbyPage() {
     setInvite(null);
   }
 
+  function createEggRoom() { setEggRoom(uuidv4().substring(0, 8).toUpperCase()); }
+  function enterEggRoom() {
+    if (!eggRoom) return;
+    socketRef.current?.emit("lobby_leave");
+    router.push(`/lempar-telur?room=${eggRoom}`);
+  }
+  function joinEggRoom() {
+    if (!joinEggId.trim()) return;
+    socketRef.current?.emit("lobby_leave");
+    router.push(`/lempar-telur?room=${joinEggId.trim().toUpperCase()}`);
+  }
+
   function logout() {
     socketRef.current?.emit("lobby_leave");
     socketRef.current?.disconnect();
@@ -283,12 +295,13 @@ export default function LobbyPage() {
 
   if (!user) return null;
 
-  const multiRooms = roomList.filter((r) => !r.started && r.gameMode !== "battle");
+  const multiRooms  = roomList.filter((r) => !r.started && r.gameMode !== "battle" && r.gameMode !== "egg");
   const battleRooms = roomList.filter((r) => r.gameMode === "battle" && !r.started);
+  const eggRooms    = roomList.filter((r) => r.gameMode === "egg" && !r.started);
   const charEmoji = CHARACTERS.find((c) => c.id === character)?.emoji ?? "🐷";
 
   return (
-    <div className="min-h-screen flex flex-col items-center bg-linear-to-br from-pink-400 via-fuchsia-400 to-rose-400 p-3 pb-6">
+    <div className="min-h-screen flex flex-col items-center bg-linear-to-br from-red-500 via-fuchsia-600 via-purple-700 to-indigo-800 p-3 pb-6">
 
       {/* Session kicked overlay */}
       {sessionKicked && (
@@ -427,25 +440,23 @@ export default function LobbyPage() {
         {/* ── Tab Navigation ── */}
         <div className="bg-white/20 backdrop-blur-md rounded-3xl shadow-2xl overflow-hidden">
           <div className="flex border-b border-white/15">
-            {(["solo", "multi", "battle"] as ActiveTab[]).map((tab) => {
-              const labels: Record<ActiveTab, string> = { solo: "🎮 Solo", multi: "🏠 Multi", battle: "⚔️ Battle" };
+            {(["solo", "multi", "battle", "egg"] as ActiveTab[]).map((tab) => {
+              const labels: Record<ActiveTab, string> = { solo: "🎮 Solo", multi: "🏠 Multi", battle: "⚔️ Battle", egg: "🥚 Telur" };
+              const badges: Partial<Record<ActiveTab, number>> = { battle: battleRooms.length, multi: multiRooms.length, egg: eggRooms.length };
+              const badgeColors: Partial<Record<ActiveTab, string>> = { battle: "bg-red-500", multi: "bg-green-500", egg: "bg-yellow-400" };
               const active = activeTab === tab;
+              const badge = badges[tab] ?? 0;
               return (
                 <button
                   key={tab}
                   onClick={() => handleTabChange(tab)}
-                  className={`flex-1 py-3 text-sm font-bold transition relative ${active ? "text-white" : "text-white/50 hover:text-white/80"}`}
+                  className={`flex-1 py-3 text-xs font-bold transition relative ${active ? "text-white" : "text-white/50 hover:text-white/80"}`}
                 >
                   {labels[tab]}
-                  {active && <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-8 h-0.5 bg-white rounded-full" />}
-                  {tab === "battle" && battleRooms.length > 0 && (
-                    <span className="absolute top-1.5 right-2 bg-red-500 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
-                      {battleRooms.length}
-                    </span>
-                  )}
-                  {tab === "multi" && multiRooms.length > 0 && (
-                    <span className="absolute top-1.5 right-2 bg-green-500 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
-                      {multiRooms.length}
+                  {active && <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-6 h-0.5 bg-white rounded-full" />}
+                  {badge > 0 && (
+                    <span className={`absolute top-1 right-1 ${badgeColors[tab]} text-white text-[8px] font-bold w-3.5 h-3.5 rounded-full flex items-center justify-center`}>
+                      {badge}
                     </span>
                   )}
                 </button>
@@ -466,6 +477,12 @@ export default function LobbyPage() {
               </button>
               <button onClick={playBaby} className="w-full py-3 bg-linear-to-r from-purple-500 to-indigo-500 hover:from-purple-400 hover:to-indigo-400 text-white text-base font-bold rounded-2xl shadow-lg transition active:scale-95">
                 👶 Baby Dino Solo
+              </button>
+              <button
+                onClick={() => { socketRef.current?.emit("lobby_leave"); router.push("/lempar-telur?room=solo"); }}
+                className="w-full py-3 bg-linear-to-r from-amber-400 to-yellow-500 hover:from-amber-300 hover:to-yellow-400 text-gray-900 text-base font-bold rounded-2xl shadow-lg transition active:scale-95"
+              >
+                🥚 Lempar Telur Solo
               </button>
             </div>
           )}
@@ -627,6 +644,74 @@ export default function LobbyPage() {
                         </div>
                         <button onClick={() => joinFromList(room)} className="ml-2 shrink-0 px-3 py-1.5 bg-red-500 hover:bg-red-400 text-white text-xs font-bold rounded-lg transition active:scale-95">
                           Join ⚔️
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── Egg (Lempar Telur) Tab ── */}
+          {activeTab === "egg" && (
+            <div className="p-4 space-y-3">
+              <div className="flex items-start gap-2 bg-white/10 rounded-2xl p-3">
+                <span className="text-2xl">🥚</span>
+                <div>
+                  <p className="text-white font-bold text-sm">Lempar Telur</p>
+                  <p className="text-white/60 text-xs">Naiki platform setinggi mungkin! Maks 5 pemain, 1 nyawa — siapa bertahan paling tinggi?</p>
+                </div>
+                <span className="bg-yellow-400 text-gray-900 text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ml-auto">NEW</span>
+              </div>
+
+              {!eggRoom ? (
+                <button onClick={createEggRoom} className="w-full py-3 bg-linear-to-r from-yellow-500 to-orange-500 hover:from-yellow-400 hover:to-orange-400 text-white font-bold rounded-2xl shadow-lg transition active:scale-95">
+                  🥚 Buat Room Lempar Telur
+                </button>
+              ) : (
+                <div className="bg-white/10 rounded-2xl p-3 border border-white/20">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-white font-bold text-sm">🥚 Egg Room aktif</p>
+                    <button onClick={() => setEggRoom(null)} className="text-white/50 hover:text-white text-xs underline">Batalkan</button>
+                  </div>
+                  <div className="flex items-center gap-2 mb-3">
+                    <span className="font-mono bg-white/20 text-yellow-200 font-extrabold px-3 py-1.5 rounded-lg flex-1 text-center text-lg tracking-widest">{eggRoom}</span>
+                    <button onClick={() => navigator.clipboard?.writeText(eggRoom).catch(() => {})} className="px-3 py-1.5 bg-white/20 hover:bg-white/30 text-white text-xs font-bold rounded-lg transition">Salin</button>
+                  </div>
+                  <button onClick={enterEggRoom} className="w-full py-2.5 bg-yellow-500 hover:bg-yellow-400 text-white font-bold rounded-xl transition active:scale-95">▶️ Masuk ke Egg Room</button>
+                </div>
+              )}
+
+              <div className="bg-white/10 rounded-2xl p-3">
+                <p className="text-white/80 text-xs font-semibold mb-2">🔗 Gabung dengan kode</p>
+                <div className="flex gap-2">
+                  <input type="text" placeholder="Kode egg room..." value={joinEggId} onChange={(e) => setJoinEggId(e.target.value.toUpperCase())} maxLength={8} className="flex-1 px-3 py-2 rounded-xl bg-white/80 text-gray-700 font-mono font-bold text-base tracking-widest outline-none focus:ring-2 focus:ring-yellow-300" />
+                  <button onClick={joinEggRoom} className="px-4 py-2 bg-yellow-500 hover:bg-yellow-400 text-white font-bold rounded-xl transition active:scale-95">Join</button>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <p className="text-white font-bold text-sm flex-1">🥚 Egg Room Tersedia</p>
+                  {eggRooms.length > 0 && <span className="bg-yellow-400 text-gray-900 text-xs font-bold px-2 py-0.5 rounded-full">{eggRooms.length}</span>}
+                  <button onClick={() => socketRef.current?.emit("request_room_list")} className="text-white/50 hover:text-white text-xs transition">↻</button>
+                </div>
+                {eggRooms.length === 0 ? (
+                  <div className="bg-white/5 rounded-2xl py-5 text-center">
+                    <p className="text-white/40 text-sm">Belum ada egg room</p>
+                    <p className="text-white/30 text-xs mt-1">Buat room di atas atau tunggu pemain lain</p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2 max-h-48 overflow-y-auto">
+                    {eggRooms.map((room) => (
+                      <div key={room.id} className="flex items-center justify-between bg-white/10 hover:bg-white/20 rounded-xl px-3 py-2.5 transition">
+                        <div className="flex flex-col min-w-0">
+                          <span className="font-mono text-yellow-200 font-extrabold text-sm tracking-wider">{room.id}</span>
+                          <p className="text-white/60 text-xs mt-0.5">Host: <span className="text-white/80 font-semibold">{room.host}</span> · {room.playerCount}/5 pemain</p>
+                        </div>
+                        <button onClick={() => joinFromList(room)} className="ml-2 shrink-0 px-3 py-1.5 bg-yellow-500 hover:bg-yellow-400 text-gray-900 text-xs font-bold rounded-lg transition active:scale-95">
+                          Join 🥚
                         </button>
                       </div>
                     ))}

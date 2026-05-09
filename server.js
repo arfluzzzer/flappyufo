@@ -24,6 +24,30 @@ const activeUsers = new Map();
 
 // ── Battle game state ──────────────────────────────────────────────────────
 const battleRooms = new Map();
+
+// ── Lempar Telur (Egg Throw) state ─────────────────────────────────────────
+const eggRooms = new Map();
+const EGG_SPAWN_X = [100, 250, 400, 550, 700];
+const EGG_MAX_PLAYERS = 5;
+
+function resetEggRoom(room, roomId) {
+  room.started = false;
+  room.gameOver = false;
+  room.startTime = null;
+  room.rematchVotes.clear();
+  if (room.resetTimeout) { clearTimeout(room.resetTimeout); room.resetTimeout = null; }
+  Array.from(room.players.values()).forEach((p) => {
+    p.alive = true;
+    p.platformLevel = 0;
+    p.highestLevel = 0;
+    p.x = EGG_SPAWN_X[p.slot] ?? 400;
+  });
+  io.to(roomId).emit("egg_room_state", {
+    players: Array.from(room.players.values()),
+    host: room.host,
+    started: false,
+  });
+}
 const BATTLE_SPAWN_X = [130, 670, 280, 520];
 
 function getNextBattleTurn(room) {
@@ -128,7 +152,21 @@ function getRoomList() {
         started: br.started,
       };
     });
-  return [...gameList, ...battleList];
+  const eggList = Array.from(eggRooms.values())
+    .filter((er) => er.players.size > 0)
+    .map((er) => {
+      const hostPlayer = Array.from(er.players.values()).find((p) => p.id === er.host);
+      return {
+        id: er.id,
+        host: hostPlayer?.username || "?",
+        playerCount: er.players.size,
+        gameMode: "egg",
+        speed: 0,
+        hasPassword: false,
+        started: er.started,
+      };
+    });
+  return [...gameList, ...battleList, ...eggList];
 }
 
 function broadcastRooms() {
@@ -140,6 +178,7 @@ io.on("connection", (socket) => {
   let currentRoom = null;
   let currentUser = null;
   let currentBattleRoom = null;
+  let currentEggRoom = null;
 
   // ── LOBBY ──────────────────────────────────────────────────────────────
   socket.on("lobby_join", ({ username, pigColor, character }) => {
@@ -151,7 +190,8 @@ io.on("connection", (socket) => {
       if (prevId && prevId !== socket.id) {
         const prevIsInGame =
           Array.from(battleRooms.values()).some((br) => br.players.has(prevId)) ||
-          Array.from(rooms.values()).some((r) => r.players.has(prevId));
+          Array.from(rooms.values()).some((r) => r.players.has(prevId)) ||
+          Array.from(eggRooms.values()).some((er) => er.players.has(prevId));
         if (!prevIsInGame) {
           const prevSocket = io.sockets.sockets.get(prevId);
           if (prevSocket) {
@@ -713,6 +753,120 @@ io.on("connection", (socket) => {
     });
   });
 
+  // ── EGG (LEMPAR TELUR) ─────────────────────────────────────────────────
+  socket.on("egg_join", ({ roomId, username, pigColor, character }) => {
+    if (!roomId) return;
+    currentEggRoom = roomId;
+    currentUser = username;
+    if (username) activeUsers.set(String(username).toLowerCase(), socket.id);
+
+    if (!eggRooms.has(roomId)) {
+      eggRooms.set(roomId, {
+        id: roomId,
+        players: new Map(),
+        host: socket.id,
+        started: false,
+        gameOver: false,
+        startTime: null,
+        rematchVotes: new Set(),
+        resetTimeout: null,
+      });
+    }
+    const er = eggRooms.get(roomId);
+    if (er.players.size === 0) er.host = socket.id;
+    if (er.players.has(socket.id)) {
+      socket.join(roomId);
+      socket.emit("egg_room_state", { players: Array.from(er.players.values()), host: er.host, started: er.started });
+      return;
+    }
+    if (er.players.size >= EGG_MAX_PLAYERS) {
+      socket.emit("egg_join_error", { error: `Room penuh (maks ${EGG_MAX_PLAYERS} pemain)` });
+      return;
+    }
+
+    const slot = er.players.size;
+    er.players.set(socket.id, {
+      id: socket.id, username,
+      x: EGG_SPAWN_X[slot] ?? 400,
+      alive: true, platformLevel: 0, highestLevel: 0,
+      pigColor: pigColor || "pink", character: character || "pig", slot,
+    });
+    socket.join(roomId);
+    lobbyPlayers.delete(socket.id);
+    broadcastLobby();
+    broadcastRooms();
+    io.to(roomId).emit("egg_room_state", { players: Array.from(er.players.values()), host: er.host, started: er.started });
+  });
+
+  socket.on("egg_start", () => {
+    if (!currentEggRoom) return;
+    const er = eggRooms.get(currentEggRoom);
+    if (!er || er.started || socket.id !== er.host || er.players.size < 2) return;
+    er.started = true;
+    er.gameOver = false;
+    er.startTime = Date.now();
+    broadcastRooms();
+    io.to(currentEggRoom).emit("egg_game_start", {
+      players: Array.from(er.players.values()),
+      startTime: er.startTime,
+    });
+  });
+
+  socket.on("egg_jump", ({ fromLevel }) => {
+    if (!currentEggRoom) return;
+    socket.to(currentEggRoom).emit("egg_player_jumped", { id: socket.id, fromLevel });
+  });
+
+  socket.on("egg_land", ({ level }) => {
+    if (!currentEggRoom) return;
+    const er = eggRooms.get(currentEggRoom);
+    if (!er || !er.started) return;
+    const p = er.players.get(socket.id);
+    if (!p || !p.alive) return;
+    p.platformLevel = Number(level) || 0;
+    if (p.platformLevel > p.highestLevel) p.highestLevel = p.platformLevel;
+    socket.to(currentEggRoom).emit("egg_player_landed", { id: socket.id, level: p.platformLevel });
+  });
+
+  socket.on("egg_died", () => {
+    if (!currentEggRoom) return;
+    const er = eggRooms.get(currentEggRoom);
+    if (!er || !er.started) return;
+    const p = er.players.get(socket.id);
+    if (!p || !p.alive) return;
+    p.alive = false;
+    io.to(currentEggRoom).emit("egg_player_died", { id: socket.id, players: Array.from(er.players.values()) });
+    const alive = Array.from(er.players.values()).filter((pl) => pl.alive);
+    if (alive.length === 0) {
+      let winner = null; let maxLevel = -1;
+      for (const pl of er.players.values()) {
+        if (pl.highestLevel > maxLevel) { maxLevel = pl.highestLevel; winner = pl; }
+      }
+      er.gameOver = true; er.started = false;
+      broadcastRooms();
+      io.to(currentEggRoom).emit("egg_game_over", {
+        winnerId: winner?.id ?? null,
+        winnerName: winner?.username ?? "?",
+        players: Array.from(er.players.values()),
+      });
+      er.resetTimeout = setTimeout(() => resetEggRoom(er, currentEggRoom), 60_000);
+    }
+  });
+
+  socket.on("egg_sync", ({ worldY, vy, state }) => {
+    if (!currentEggRoom) return;
+    socket.to(currentEggRoom).emit("egg_player_sync", { id: socket.id, worldY, vy, state });
+  });
+
+  socket.on("egg_rematch", () => {
+    if (!currentEggRoom) return;
+    const er = eggRooms.get(currentEggRoom);
+    if (!er || !er.gameOver) return;
+    er.rematchVotes.add(socket.id);
+    io.to(currentEggRoom).emit("egg_rematch_update", { votes: er.rematchVotes.size, total: er.players.size });
+    if (er.rematchVotes.size >= er.players.size) resetEggRoom(er, currentEggRoom);
+  });
+
   socket.on("disconnect", () => {
     lobbyPlayers.delete(socket.id);
     // Remove from activeUsers only if this socket is still the registered one
@@ -802,6 +956,46 @@ io.on("connection", (socket) => {
             host: br.host,
             started: br.started,
           });
+        }
+      }
+    }
+
+    // ── Egg room cleanup ──────────────────────────────────────────────────
+    if (currentEggRoom) {
+      const er = eggRooms.get(currentEggRoom);
+      if (er) {
+        // Mark the disconnected player as dead if game is running
+        const p = er.players.get(socket.id);
+        if (p && er.started && !er.gameOver && p.alive) {
+          p.alive = false;
+          io.to(currentEggRoom).emit("egg_player_died", { id: socket.id, players: Array.from(er.players.values()) });
+          const alive = Array.from(er.players.values()).filter((pl) => pl.alive);
+          if (alive.length === 0) {
+            let winner = null; let maxLevel = -1;
+            for (const pl of er.players.values()) {
+              if (pl.highestLevel > maxLevel) { maxLevel = pl.highestLevel; winner = pl; }
+            }
+            er.gameOver = true; er.started = false;
+            broadcastRooms();
+            io.to(currentEggRoom).emit("egg_game_over", {
+              winnerId: winner?.id ?? null,
+              winnerName: winner?.username ?? "?",
+              players: Array.from(er.players.values()),
+            });
+            er.resetTimeout = setTimeout(() => resetEggRoom(er, currentEggRoom), 60_000);
+          }
+        }
+
+        er.players.delete(socket.id);
+        io.to(currentEggRoom).emit("egg_player_left", { id: socket.id });
+        broadcastRooms();
+
+        if (er.players.size === 0) {
+          if (er.resetTimeout) clearTimeout(er.resetTimeout);
+          eggRooms.delete(currentEggRoom);
+        } else {
+          if (er.host === socket.id) er.host = Array.from(er.players.keys())[0];
+          io.to(currentEggRoom).emit("egg_room_state", { players: Array.from(er.players.values()), host: er.host, started: er.started });
         }
       }
     }
