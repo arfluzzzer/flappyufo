@@ -59,7 +59,8 @@ interface GS {
   jumpPressed: boolean; jumpConsumed: boolean;
   lastSync: number;
   solo: boolean;
-  myPlatOffsetX: number; // egg's x offset from platform center while resting
+  myPlatOffsetX: number;
+  jumpPeakY: number; // highest worldY reached this jump (tracks which platforms were overshot)
 }
 
 interface Props { roomId: string; username: string; pigColor: string; character: string; }
@@ -242,6 +243,7 @@ export default function LemparTelur({ roomId, username, pigColor }: Props) {
     lastSync:      0,
     solo:          isSolo,
     myPlatOffsetX: 0,
+    jumpPeakY:     0,
   }).current;
 
   // ── Socket (multi only) ───────────────────────────────────────────────
@@ -278,7 +280,7 @@ export default function LemparTelur({ roomId, username, pigColor }: Props) {
       gs.myState = "resting"; gs.platformLevel = 0; gs.highestLevel = 0;
       gs.camY = -H * 0.35; gs.jumpPressed = false; gs.jumpConsumed = false;
       gs.playStart = Date.now();
-      gs.myPlatOffsetX = 0;
+      gs.myPlatOffsetX = 0; gs.jumpPeakY = 0;
       gs.others.clear();
       const me = players.find(p => p.id === myIdRef.current);
       if (me) { gs.mySlot = me.slot; gs.x = EGG_SPAWN_X[me.slot] ?? W / 2; }
@@ -333,7 +335,7 @@ export default function LemparTelur({ roomId, username, pigColor }: Props) {
     gs.myState = "resting"; gs.platformLevel = 0; gs.highestLevel = 0;
     gs.camY = -H * 0.35; gs.startTime = Date.now(); gs.playStart = Date.now();
     gs.jumpPressed = false; gs.jumpConsumed = false;
-    gs.x = W / 2; gs.myPlatOffsetX = 0;
+    gs.x = W / 2; gs.myPlatOffsetX = 0; gs.jumpPeakY = 0;
   }
 
   // ── RAF loop ──────────────────────────────────────────────────────────
@@ -351,46 +353,64 @@ export default function LemparTelur({ roomId, username, pigColor }: Props) {
       // ── Own egg physics ────────────────────────────────────────────
       if (gs.phase === "playing") {
         if (gs.jumpPressed && !gs.jumpConsumed && gs.myState === "resting") {
-          gs.myState = "jumping"; gs.vy = JUMP_SPEED; gs.jumpConsumed = true;
+          gs.myState   = "jumping";
+          gs.vy        = JUMP_SPEED;
+          gs.jumpConsumed = true;
+          gs.jumpPeakY = gs.worldY; // start tracking from launch height
           sndJump();
           if (!gs.solo) socket?.emit("egg_jump", { fromLevel: gs.platformLevel });
         }
         if (!gs.jumpPressed) gs.jumpConsumed = false;
 
         if (gs.myState === "jumping") {
-          gs.vy -= GRAVITY; gs.worldY += gs.vy;
+          gs.vy -= GRAVITY;
+          gs.worldY += gs.vy;
+          if (gs.worldY > gs.jumpPeakY) gs.jumpPeakY = gs.worldY; // track peak
 
-          const nextLv  = gs.platformLevel + 1;
-          const nWY     = platWY(nextLv);
-          const currWY  = platWY(gs.platformLevel);
-          const nCX     = platCX(nextLv, elapsed);
-          // wider hitbox than platform actual width for more forgiving landing
-          const halfPw  = platW(nextLv) / 2 + EGG_R * 1.0;
+          const currWY = platWY(gs.platformLevel);
 
-          // Land when falling (vy<0) and egg is anywhere between current
-          // platform and next platform — full gap gives many frames for
-          // the moving platform to slide under the egg
-          if (gs.vy < 0 && gs.worldY <= nWY && gs.worldY >= currWY) {
-            if (Math.abs(gs.x - nCX) <= halfPw) {
-              gs.worldY        = nWY;
-              gs.vy            = 0;
-              gs.myState       = "resting";
-              gs.platformLevel = nextLv;
-              // remember where the egg landed relative to the platform center
-              gs.myPlatOffsetX = gs.x - nCX;
-              if (nextLv > gs.highestLevel) gs.highestLevel = nextLv;
-              sndLand();
-              if (!gs.solo) {
-                socket?.emit("egg_land", { level: nextLv });
-                const me = gs.players.find(p => p.id === myId);
-                if (me) me.highestLevel = gs.highestLevel;
+          // ── Landing: check every platform above current while falling ──
+          // Iterates upward until it finds the first platform the egg is
+          // currently below. Platforms above the peak are skipped (egg
+          // never reached them). The window covers the full gap between
+          // two consecutive platforms so slow-moving platforms have time
+          // to slide under the egg.
+          if (gs.vy < 0) {
+            let landed = false;
+            for (let lv = gs.platformLevel + 1; lv <= gs.platformLevel + 12 && !landed; lv++) {
+              const pWY = platWY(lv);
+              if (gs.worldY >= pWY) continue;      // egg still above this platform
+              if (gs.jumpPeakY < pWY) break;       // never reached this high — stop
+              // Egg was above pWY at peak, now below it (fell through)
+              if (gs.worldY >= pWY - PLATFORM_SPACING) {
+                const pCX    = platCX(lv, elapsed);
+                const halfPw = platW(lv) / 2 + EGG_R * 1.0;
+                if (Math.abs(gs.x - pCX) <= halfPw) {
+                  gs.worldY        = pWY;
+                  gs.vy            = 0;
+                  gs.myState       = "resting";
+                  gs.platformLevel = lv;
+                  gs.myPlatOffsetX = gs.x - pCX;
+                  gs.jumpPeakY     = 0;
+                  if (lv > gs.highestLevel) gs.highestLevel = lv;
+                  sndLand();
+                  if (!gs.solo) {
+                    socket?.emit("egg_land", { level: lv });
+                    const me = gs.players.find(p => p.id === myId);
+                    if (me) me.highestLevel = gs.highestLevel;
+                  }
+                  landed = true;
+                }
               }
+              break; // only test the first platform below the egg per frame
             }
           }
 
-          // Death: fell below current platform surface
+          // ── Death: fell below the platform we jumped from ──────────────
           if (gs.worldY < currWY - 80) {
-            gs.myState = "dead"; sndDie();
+            gs.myState   = "dead";
+            gs.jumpPeakY = 0;
+            sndDie();
             if (gs.solo) {
               gs.phase = "gameover";
             } else {
@@ -401,8 +421,7 @@ export default function LemparTelur({ roomId, username, pigColor }: Props) {
             }
           }
         } else if (gs.myState === "resting") {
-          // move with the platform, keeping the lateral offset from landing
-          gs.x     = platCX(gs.platformLevel, elapsed) + gs.myPlatOffsetX;
+          gs.x      = platCX(gs.platformLevel, elapsed) + gs.myPlatOffsetX;
           gs.worldY = platWY(gs.platformLevel);
         }
 
