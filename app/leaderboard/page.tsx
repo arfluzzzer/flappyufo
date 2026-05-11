@@ -17,7 +17,17 @@ const GAME_OPTIONS = [
 
 const VALID_GAME_KEYS = new Set(GAME_OPTIONS.map((g) => g.key));
 
+import { Suspense } from "react";
+
 export default function LeaderboardPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-gray-950 text-white">Loading...</div>}>
+      <LeaderboardContent />
+    </Suspense>
+  );
+}
+
+function LeaderboardContent() {
   const searchParams = useSearchParams();
   const [data, setData] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
