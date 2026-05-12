@@ -1001,7 +1001,7 @@ export default function LemparTelur({
         width={W}
         height={H}
         onClick={handleClick}
-        className="rounded-xl shadow-2xl border-2 border-white/20 cursor-pointer max-w-full"
+        className="rounded-xl shadow-2xl border-2 border-white/20 cursor-pointer w-full h-auto max-w-[800px] aspect-[400/600] object-contain"
         style={{ imageRendering: "pixelated" }}
       />
       <p className="text-white/60 text-xs">

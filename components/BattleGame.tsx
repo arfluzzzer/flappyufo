@@ -1926,18 +1926,17 @@ export default function BattleGame({
         </div>
       )}
 
-      {/* Game canvas */}
       <canvas
         ref={canvasRef}
         width={W}
         height={H}
-        className="rounded-2xl shadow-2xl max-w-full"
+        className="rounded-2xl shadow-2xl w-full h-auto max-w-[1200px] aspect-[800/500] object-contain"
         style={{ display: uiPhase === "playing" ? "block" : "none" }}
       />
 
       {/* Mobile controls — visible during gameplay */}
       {uiPhase === "playing" && (
-        <div className="w-full max-w-200 flex flex-col gap-2 px-2 select-none">
+        <div className="w-full max-w-[1200px] flex flex-col gap-2 px-2 select-none">
           {/* Row 1: Move ← → | Aim ↑↓ | Throw button */}
           <div className="flex gap-2 mb-2 items-stretch h-[4.5rem]">
             {/* Move Left / Right */}

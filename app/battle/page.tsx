@@ -49,7 +49,7 @@ function BattlePageInner() {
 
   return (
     <div ref={wrapRef} className="min-h-screen flex flex-col items-center justify-start bg-gray-900 pt-2 pb-4 px-2">
-      <div className="mb-2 flex items-center gap-3 w-full max-w-205">
+      <div className="mb-2 flex items-center gap-3 w-full max-w-[1200px]">
         <a href="/lobby" className="text-white/70 hover:text-white text-sm underline shrink-0">← Lobby</a>
         <span className="text-white font-bold text-base flex-1 text-center">⚔️ Cat vs Dog Battle</span>
         <span className="bg-white/20 text-yellow-200 text-xs font-mono font-bold px-2 py-1 rounded-full shrink-0">{roomId}</span>

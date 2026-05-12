@@ -69,7 +69,7 @@ function LemparTelurInner() {
       ref={wrapRef}
       className={`min-h-screen flex flex-col items-center justify-start bg-linear-to-br from-purple-900 via-indigo-900 to-fuchsia-900 pt-2 pb-4 px-2 ${isFullscreen ? "justify-center" : ""}`}
     >
-      <div className="mb-2 flex items-center gap-3 w-full max-w-205">
+      <div className="mb-2 flex items-center gap-3 w-full max-w-[800px]">
         <a
           href="/lobby"
           className="text-white/70 hover:text-white text-sm underline shrink-0"
